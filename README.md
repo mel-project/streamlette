@@ -29,11 +29,11 @@ For fuzzing, we want to be able to deterministically reproduce runs of the conse
   - Obtain tips: get the tip hashes of the message tree
   - Obtain diff: given the "tips" of somebody else's message tree, get some subsequent messages (limited to a certain size) to grow their tree to be more like ours
   - Apply diff: inserts messages into the tree
-- `Consensus`: implements the protocol, unified within a single `tick() -> Result<Option<Bytes>, Fatal>` function. `tick_to_end()` blocks and drives the `tick()` function with the usual gradually slowing clock.
+- `Decider`: implements the protocol, unified within a single `tick() -> Result<Option<Bytes>, Fatal>` function. `tick_to_end()` blocks and drives the `tick()` function with the usual gradually slowing clock.
   - Initial tick should be something like 1 second to ensure quick progression
   - This way, "real programs" can just `tick_to_end() -> Result<Bytes, Fatal>` while the fuzzer calls `tick()` deterministically with a "mock" configuration.
-  - _Nothing_ should run off into the background. When `Consensus` drops, all resources should synchronously free.
-- Everything passed around with a trait `ConsensusConfig`
+  - _Nothing_ should run off into the background. When `Decider` drops, all resources should synchronously free.
+- Everything passed around with a trait `DeciderConfig`
   - Use trait objects and similar dynamic dispatch to avoid viral generics
   - Returns info like vote power, entropy seed, and list of public keys; a helper function produces the correct proposer for the given tickno from this info
   - Entire network abstracted into `next_diff_req(req)` and `get_diff_from_peer(req)`, both of which must return relatively quickly, or time out if that's not possible

@@ -39,6 +39,7 @@ impl Core {
             total_votes,
         }
     }
+
     /// Insert *my* votes into the tree. We vote for everything that extends from a longest notarized chain; there cannot be duplicates within an epoch because of the tick_source thing.
     pub fn insert_my_votes(&mut self, my_sk: Ed25519SK) {
         let tips: HashSet<HashVal> = self.get_lnc_tips().into_iter().collect();
