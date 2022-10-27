@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, convert::Infallible, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use arrayref::array_ref;
 use async_trait::async_trait;
@@ -19,7 +19,7 @@ pub struct Decider {
 
 impl Decider {
     /// Creates a new Decider.
-    pub fn new(&self, config: impl DeciderConfig) -> Self {
+    pub fn new(config: impl DeciderConfig) -> Self {
         let seed = config.seed();
         let total_votes: u64 = config.vote_weights().values().sum();
         let weights = config.vote_weights();
@@ -54,6 +54,11 @@ impl Decider {
         }
     }
 
+    /// Prints the graphivz representation of everything we have now.
+    pub fn debug_graphviz(&self) -> String {
+        self.core.debug_graphviz()
+    }
+
     /// Runs one tick of the Decider. If the decision has been made, return it.
     ///
     /// Does no I/O. Either use [Decider::tick_to_end], or call the [Decider::sync_state] method periodically.
@@ -75,13 +80,17 @@ impl Decider {
     }
 
     /// Synchronized state, given a timeout.
-    pub async fn sync_state(&mut self, timeout: Duration) {
-        self.config
-            .sync_core(&mut self.core)
-            .or(async {
-                async_io::Timer::after(timeout).await;
-            })
-            .await
+    pub async fn sync_state(&mut self, timeout: Option<Duration>) {
+        if let Some(timeout) = timeout {
+            self.config
+                .sync_core(&mut self.core)
+                .or(async {
+                    async_io::Timer::after(timeout).await;
+                })
+                .await
+        } else {
+            self.config.sync_core(&mut self.core).await;
+        }
     }
 
     /// Ticks this decider until the decision has been made. We use a gradually increasing synchronization interval that starts from 1 second and increases by 10% every tick.
@@ -91,7 +100,8 @@ impl Decider {
             if let Some(result) = self.tick() {
                 return result;
             }
-            self.sync_state(Duration::from_secs_f64(interval)).await;
+            self.sync_state(Duration::from_secs_f64(interval).into())
+                .await;
             interval *= 1.1
         }
     }

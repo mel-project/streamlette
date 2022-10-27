@@ -1,32 +1,112 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use tmelcrypt::{Ed25519PK, Ed25519SK, HashVal};
 
 use crate::msg::{Message, Proposal, Solicit, Vote};
 
 /// Core consensus logic. Stores the tree, etc.
+#[derive(Clone)]
 pub struct Core {
-    valid_proposals: HashMap<HashVal, Proposal>,
-    vote_solicits: HashMap<HashVal, Solicit>,
-    votes: HashMap<HashVal, Vote>,
+    valid_proposals: BTreeMap<HashVal, Proposal>,
+    vote_solicits: BTreeMap<HashVal, Solicit>,
+    votes: BTreeMap<HashVal, Vote>,
     tick_source: HashSet<(u64, Ed25519PK)>,
     nonce: u128,
 
-    tick_to_leader: Box<dyn Fn(u64) -> Ed25519PK + Send + Sync + 'static>,
-    vote_map: HashMap<Ed25519PK, u64>,
+    tick_to_leader: Arc<dyn Fn(u64) -> Ed25519PK + Send + Sync + 'static>,
+    vote_map: BTreeMap<Ed25519PK, u64>,
     total_votes: u64,
 }
 
+/// An enum of different possible messages, used to represent a "diff" between different [Core]s.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DiffMessage {
+    Proposal(Proposal),
+    Solicit(Solicit),
+    Vote(Vote),
+}
+
 impl Core {
+    /// Obtain a summary of the whole status, as a mapping between message hash and the total number of votes voting for it. This is then used when asking around for missing messages.
+    pub fn summary(&self) -> HashMap<HashVal, u64> {
+        let mut toret = HashMap::new();
+        for &h in self.valid_proposals.keys() {
+            toret.insert(h, 0);
+        }
+        for &h in self.vote_solicits.keys() {
+            toret.insert(h, 0);
+        }
+        for (_, vote) in self.votes.iter() {
+            *toret.entry(vote.voting_for).or_default() += self.vote_map[&vote.source]
+        }
+        toret
+    }
+
+    /// Obtains a diff, given somebody else's summary. We return an ordered vector of messages.
+    pub fn get_diff(&self, their_summary: &HashMap<HashVal, u64>) -> Vec<DiffMessage> {
+        let our_summary = self.summary();
+
+        let mut toret = vec![];
+        let votes_by_candidate: HashMap<HashVal, Vec<Vote>> =
+            self.votes.values().fold(HashMap::new(), |mut hm, v| {
+                hm.entry(v.voting_for).or_default().push(v.clone());
+                hm
+            });
+        for (hash, prop) in self.valid_proposals.iter() {
+            if our_summary.get(hash) != their_summary.get(hash) {
+                if !their_summary.contains_key(hash) {
+                    toret.push(DiffMessage::Proposal(prop.clone()));
+                }
+                if let Some(v) = votes_by_candidate.get(hash) {
+                    for v in v.iter() {
+                        toret.push(DiffMessage::Vote(v.clone()))
+                    }
+                }
+            }
+        }
+        for (hash, solc) in self.vote_solicits.iter() {
+            if our_summary.get(hash) != their_summary.get(hash) {
+                if !their_summary.contains_key(hash) {
+                    toret.push(DiffMessage::Solicit(solc.clone()));
+                }
+                if let Some(v) = votes_by_candidate.get(hash) {
+                    for v in v.iter() {
+                        toret.push(DiffMessage::Vote(v.clone()))
+                    }
+                }
+            }
+        }
+        // sort by epoch
+        toret.sort_unstable_by_key(|s| match s {
+            DiffMessage::Proposal(p) => p.tick,
+            DiffMessage::Solicit(s) => s.tick,
+            DiffMessage::Vote(_) => u64::MAX,
+        });
+        toret
+    }
+
+    /// Applies a particular DiffMessage
+    pub fn apply_one_diff(&mut self, dmsg: DiffMessage) -> anyhow::Result<()> {
+        match dmsg {
+            DiffMessage::Proposal(p) => self.insert_proposal(p),
+            DiffMessage::Solicit(s) => self.insert_solicit(s),
+            DiffMessage::Vote(v) => self.insert_vote(v),
+        }
+    }
+
     /// Create a new Core with the given logic.
-    pub fn new(
+    pub(crate) fn new(
         nonce: u128,
         player_votes: impl IntoIterator<Item = (Ed25519PK, u64)>,
         tick_to_leader: impl Fn(u64) -> Ed25519PK + Send + Sync + 'static,
     ) -> Self {
-        let vote_map = player_votes.into_iter().collect::<HashMap<_, _>>();
+        let vote_map = player_votes.into_iter().collect::<BTreeMap<_, _>>();
         let total_votes = vote_map.values().copied().sum();
         Core {
             valid_proposals: Default::default(),
@@ -34,16 +114,17 @@ impl Core {
             votes: Default::default(),
             tick_source: Default::default(),
             nonce,
-            tick_to_leader: Box::new(tick_to_leader),
+            tick_to_leader: Arc::new(tick_to_leader),
             vote_map,
             total_votes,
         }
     }
 
     /// Insert *my* votes into the tree. We vote for everything that extends from a longest notarized chain; there cannot be duplicates within an epoch because of the tick_source thing.
-    pub fn insert_my_votes(&mut self, my_sk: Ed25519SK) {
+    pub(crate) fn insert_my_votes(&mut self, my_sk: Ed25519SK) {
         let tips: HashSet<HashVal> = self.get_lnc_tips().into_iter().collect();
         if tips.is_empty() {
+            log::debug!("tips are empty, so we vote for all the proposal");
             // we vote for all the proposals --- they must all be valid to vote for due to checks when adding them
             for prop in self.valid_proposals.keys().copied().collect_vec() {
                 let vote = Vote::new(self.nonce, prop, my_sk);
@@ -66,7 +147,7 @@ impl Core {
     }
 
     /// Insert *my* proposal or solicit. If it's not my turn, literally do nothing.
-    pub fn insert_my_prop_or_solicit(
+    pub(crate) fn insert_my_prop_or_solicit(
         &mut self,
         tick: u64,
         my_sk: Ed25519SK,
@@ -77,11 +158,13 @@ impl Core {
         }
         let tips = self.get_lnc_tips();
         if let Some(&tip) = tips.first() {
+            log::debug!("we have a LNC, so we insert a solicit");
             // we arbitrarily picked a longest-notarized-chain tip. send a solicit extending from it.
             let solicit = Solicit::new(self.nonce, tick, tip, my_sk);
             self.insert_solicit(solicit)
                 .expect("could not insert my OWN solicit!");
         } else {
+            log::debug!("we do NOT have a LNC, so we insert a proposal");
             // shoot, we need to insert a proposal
             let proposal = gen_prop();
             let proposal = Proposal::new(self.nonce, tick, proposal, my_sk);
@@ -91,7 +174,7 @@ impl Core {
     }
 
     /// Obtains the finalized proposal, if such a proposal exists.
-    pub fn get_finalized(&self) -> Option<&Proposal> {
+    pub(crate) fn get_finalized(&self) -> Option<&Proposal> {
         // tips are solicits that do not have any other solicits pointing to them
         let lnc = self.get_lnc_tips();
         let notarized_tips = self
@@ -132,7 +215,7 @@ impl Core {
     }
 
     /// Obtains the tips of the longest notarized chain(s).
-    pub fn get_lnc_tips(&self) -> Vec<HashVal> {
+    pub(crate) fn get_lnc_tips(&self) -> Vec<HashVal> {
         let mut memo = HashMap::new();
         let mut hash_and_len = self
             .valid_proposals
@@ -153,7 +236,7 @@ impl Core {
     }
 
     /// Insert a proposal.
-    pub fn insert_proposal(&mut self, prop: Proposal) -> anyhow::Result<()> {
+    pub(crate) fn insert_proposal(&mut self, prop: Proposal) -> anyhow::Result<()> {
         if !prop.verify_sig() && (self.tick_to_leader)(prop.tick) == prop.source {
             anyhow::bail!("bad signature")
         }
@@ -169,7 +252,7 @@ impl Core {
     }
 
     /// Insert a vote.
-    pub fn insert_vote(&mut self, vote: Vote) -> anyhow::Result<()> {
+    pub(crate) fn insert_vote(&mut self, vote: Vote) -> anyhow::Result<()> {
         if !vote.verify_sig() {
             anyhow::bail!("bad signature")
         }
@@ -182,12 +265,18 @@ impl Core {
         {
             anyhow::bail!("vote not voting for anything")
         }
-        self.votes.insert(vote.chash(), vote);
+        self.votes.insert(vote.chash(), vote.clone());
+        log::debug!(
+            "{:?} voting for {}, who now has {} votes",
+            vote.source,
+            vote.voting_for,
+            self.summary()[&vote.voting_for]
+        );
         Ok(())
     }
 
     /// Inserts a vote solicitation.
-    pub fn insert_solicit(&mut self, solicit: Solicit) -> anyhow::Result<()> {
+    pub(crate) fn insert_solicit(&mut self, solicit: Solicit) -> anyhow::Result<()> {
         if !solicit.verify_sig() && (self.tick_to_leader)(solicit.tick) == solicit.source {
             anyhow::bail!("bad signature")
         }
@@ -244,6 +333,7 @@ impl Core {
     /// Produces the graphviz representation of the whole state.
     pub fn debug_graphviz(&self) -> String {
         use std::fmt::Write;
+        let vote_counts = self.summary();
         let tips = self.get_lnc_tips();
         let mut output = String::new();
         output += "digraph G {\n";
@@ -252,7 +342,11 @@ impl Core {
                 output,
                 "{:?} [label={:?}, shape=diamond];",
                 h.to_string(),
-                String::from_utf8_lossy(&prop.body)
+                format!(
+                    "{} ({})",
+                    String::from_utf8_lossy(&prop.body),
+                    vote_counts.get(h).copied().unwrap_or_default()
+                )
             )
             .unwrap();
         }
@@ -261,7 +355,12 @@ impl Core {
                 output,
                 "{:?} [label={:?}, shape=box, style=filled, fillcolor={}];",
                 h.to_string(),
-                &format!("{} [{}]", &h.to_string()[0..8], solc.tick),
+                &format!(
+                    "{} ({}) [{}]",
+                    &h.to_string()[0..8],
+                    vote_counts.get(h).copied().unwrap_or_default(),
+                    solc.tick
+                ),
                 if tips.contains(h) {
                     "aliceblue"
                 } else {
@@ -317,7 +416,7 @@ mod tests {
                     core.insert_my_votes(my_sk)
                 }
             }
-            if let Some(v) = core.get_finalized() {
+            if let Some(_v) = core.get_finalized() {
                 println!("FINALIZED!!!!");
                 break;
             }
