@@ -90,7 +90,21 @@ fn main() {
     // go through the configs and run them
     for tick in 0..10 {
         for (i, decider) in deciders.iter_mut().enumerate() {
-            if let Some(res) = decider.tick() {
+            if let Some(res) = decider.pre_tick() {
+                eprintln!("*** {} DECIDED {:?} ***", i, res);
+            }
+        }
+        for _ in 0..10 {
+            for decider in deciders.iter_mut() {
+                smol::future::block_on(decider.sync_state(None).or(async {
+                    for _ in 0..3 {
+                        smol::future::yield_now().await;
+                    }
+                }));
+            }
+        }
+        for (i, decider) in deciders.iter_mut().enumerate() {
+            if let Some(res) = decider.post_tick() {
                 eprintln!("*** {} DECIDED {:?} ***", i, res);
             }
         }

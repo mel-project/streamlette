@@ -59,23 +59,36 @@ impl Decider {
         self.core.debug_graphviz()
     }
 
-    /// Runs one tick of the Decider. If the decision has been made, return it.
+    /// Runs the first half of the tick of the Decider. If the decision has been made, return it.
     ///
     /// Does no I/O. Either use [Decider::tick_to_end], or call the [Decider::sync_state] method periodically.
-    pub fn tick(&mut self) -> Option<Bytes> {
+    pub fn pre_tick(&mut self) -> Option<Bytes> {
         if let Some(v) = self.core.get_finalized() {
             self.decision = Some(v.body.clone());
         }
         if self.decision.is_some() {
             return self.decision.clone();
         }
-        self.tick += 1;
-        // do our logic
-        self.core.insert_my_votes(self.config.my_secret());
         self.core
             .insert_my_prop_or_solicit(self.tick, self.config.my_secret(), || {
                 self.config.generate_proposal()
             });
+        None
+    }
+
+    /// Runs the first half of the tick of the Decider. If the decision has been made, return it.
+    ///
+    /// Does no I/O. Either use [Decider::tick_to_end], or call the [Decider::sync_state] method periodically.
+    pub fn post_tick(&mut self) -> Option<Bytes> {
+        if let Some(v) = self.core.get_finalized() {
+            self.decision = Some(v.body.clone());
+        }
+        if self.decision.is_some() {
+            return self.decision.clone();
+        }
+        // do our logic
+        self.core.insert_my_votes(self.config.my_secret());
+        self.tick += 1;
         None
     }
 
@@ -97,10 +110,15 @@ impl Decider {
     pub async fn tick_to_end(mut self) -> Bytes {
         let mut interval = 1.0f64;
         loop {
-            if let Some(result) = self.tick() {
+            if let Some(result) = self.pre_tick() {
                 return result;
             }
-            self.sync_state(Duration::from_secs_f64(interval).into())
+            self.sync_state(Duration::from_secs_f64(interval / 2.0).into())
+                .await;
+            if let Some(result) = self.post_tick() {
+                return result;
+            }
+            self.sync_state(Duration::from_secs_f64(interval / 2.0).into())
                 .await;
             interval *= 1.1
         }
