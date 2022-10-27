@@ -71,11 +71,11 @@ impl Decider {
         }
         self.tick += 1;
         // do our logic
+        self.core.insert_my_votes(self.config.my_secret());
         self.core
             .insert_my_prop_or_solicit(self.tick, self.config.my_secret(), || {
                 self.config.generate_proposal()
             });
-        self.core.insert_my_votes(self.config.my_secret());
         None
     }
 

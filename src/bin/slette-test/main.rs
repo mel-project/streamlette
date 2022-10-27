@@ -71,7 +71,7 @@ impl DeciderConfig for MockConfig {
 
 fn main() {
     env_logger::init();
-    const COUNT: usize = 3;
+    const COUNT: usize = 40;
     let rng = FakeRng::new(31415926);
     let mut participants: Vec<(Ed25519SK, u64)> =
         stdcode::deserialize(&hex::decode(include_str!("KEYS.hex")).unwrap()).unwrap();
@@ -88,7 +88,7 @@ fn main() {
         .collect_vec();
     let mut deciders = configs.into_iter().map(Decider::new).collect_vec();
     // go through the configs and run them
-    for tick in 0..5 {
+    for tick in 0..10 {
         for (i, decider) in deciders.iter_mut().enumerate() {
             if let Some(res) = decider.tick() {
                 eprintln!("*** {} DECIDED {:?} ***", i, res);
@@ -103,8 +103,8 @@ fn main() {
                 }));
             }
         }
-        for decider in deciders.iter().take(3) {
-            println!("{}", decider.debug_graphviz());
-        }
+    }
+    for decider in deciders.iter().take(3) {
+        println!("{}", decider.debug_graphviz());
     }
 }

@@ -33,23 +33,28 @@ pub enum DiffMessage {
 }
 
 impl Core {
-    /// Obtain a summary of the whole status, as a mapping between message hash and the total number of votes voting for it. This is then used when asking around for missing messages.
-    pub fn summary(&self) -> HashMap<HashVal, u64> {
+    /// Obtain a summary of the whole status, as a mapping between message hash and the *XOR of all the hashes of the votes pointing to it*. This is then used when asking around for missing messages.
+    pub fn summary(&self) -> HashMap<HashVal, HashVal> {
         let mut toret = HashMap::new();
         for &h in self.valid_proposals.keys() {
-            toret.insert(h, 0);
+            toret.insert(h, HashVal::default());
         }
         for &h in self.vote_solicits.keys() {
-            toret.insert(h, 0);
+            toret.insert(h, HashVal::default());
         }
-        for (_, vote) in self.votes.iter() {
-            *toret.entry(vote.voting_for).or_default() += self.vote_map[&vote.source]
+        for (h, vote) in self.votes.iter() {
+            let xx = toret.entry(vote.voting_for).or_default();
+            let mut b = xx.0;
+            for i in 0..32 {
+                b[i] ^= h[i]
+            }
+            *xx = HashVal(b)
         }
         toret
     }
 
     /// Obtains a diff, given somebody else's summary. We return an ordered vector of messages.
-    pub fn get_diff(&self, their_summary: &HashMap<HashVal, u64>) -> Vec<DiffMessage> {
+    pub fn get_diff(&self, their_summary: &HashMap<HashVal, HashVal>) -> Vec<DiffMessage> {
         let our_summary = self.summary();
 
         let mut toret = vec![];
@@ -333,7 +338,7 @@ impl Core {
     /// Produces the graphviz representation of the whole state.
     pub fn debug_graphviz(&self) -> String {
         use std::fmt::Write;
-        let vote_counts = self.summary();
+
         let tips = self.get_lnc_tips();
         let mut output = String::new();
         output += "digraph G {\n";
@@ -342,11 +347,7 @@ impl Core {
                 output,
                 "{:?} [label={:?}, shape=diamond];",
                 h.to_string(),
-                format!(
-                    "{} ({})",
-                    String::from_utf8_lossy(&prop.body),
-                    vote_counts.get(h).copied().unwrap_or_default()
-                )
+                format!("{}", String::from_utf8_lossy(&prop.body),)
             )
             .unwrap();
         }
@@ -355,12 +356,7 @@ impl Core {
                 output,
                 "{:?} [label={:?}, shape=box, style=filled, fillcolor={}];",
                 h.to_string(),
-                &format!(
-                    "{} ({}) [{}]",
-                    &h.to_string()[0..8],
-                    vote_counts.get(h).copied().unwrap_or_default(),
-                    solc.tick
-                ),
+                &format!("{}[{}]", &h.to_string()[0..8], solc.tick),
                 if tips.contains(h) {
                     "aliceblue"
                 } else {
