@@ -23,3 +23,7 @@ smol = "1.2.5"
 stdcode = "0.1.10"
 tap = "1.0.1"
 tmelcrypt = "0.2.4"
+
+
+[target.'cfg(fuzzing)'.dependencies]
+honggfuzz="0.5"

@@ -166,8 +166,9 @@ impl Core {
             log::debug!("we have a LNC, so we insert a solicit");
             // we arbitrarily picked a longest-notarized-chain tip. send a solicit extending from it.
             let solicit = Solicit::new(self.nonce, tick, tip, my_sk);
-            self.insert_solicit(solicit)
-                .expect("could not insert my OWN solicit!");
+            if let Err(err) = self.insert_solicit(solicit) {
+                log::warn!("self-insert solicit failed: {}", err);
+            }
         } else {
             log::debug!("we do NOT have a LNC, so we insert a proposal");
             // shoot, we need to insert a proposal

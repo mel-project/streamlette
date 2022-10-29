@@ -1,6 +1,9 @@
 mod fakerng;
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 
@@ -69,10 +72,23 @@ impl DeciderConfig for MockConfig {
     }
 }
 
+#[cfg(not(fuzzing))]
 fn main() {
     env_logger::init();
-    const COUNT: usize = 40;
-    let rng = FakeRng::new(31415926);
+    main_inner(0);
+}
+
+#[cfg(fuzzing)]
+fn main() {
+    use honggfuzz::fuzz;
+    loop {
+        fuzz!(|data: u128| { main_inner(data) })
+    }
+}
+
+fn main_inner(seed: u128) {
+    const COUNT: usize = 7;
+    let rng = FakeRng::new(seed);
     let mut participants: Vec<(Ed25519SK, u64)> =
         stdcode::deserialize(&hex::decode(include_str!("KEYS.hex")).unwrap()).unwrap();
     participants.truncate(COUNT);
@@ -88,14 +104,29 @@ fn main() {
         .collect_vec();
     let mut deciders = configs.into_iter().map(Decider::new).collect_vec();
     // go through the configs and run them
-    for tick in 0..10 {
+    for _ in 0..100 {
+        // we "ban" around 1/4 of the deciders based on the rng
+        let banned_deciders: HashSet<usize> = (0..COUNT).filter(|_| rng.u64() % 4 == 0).collect();
+
+        let mut decided_count = 0;
         for (i, decider) in deciders.iter_mut().enumerate() {
+            if banned_deciders.contains(&i) {
+                continue;
+            }
             if let Some(res) = decider.pre_tick() {
                 eprintln!("*** {} DECIDED {:?} ***", i, res);
+                decided_count += 1;
             }
         }
+        if decided_count == COUNT {
+            eprintln!("*** EVERYBODY DECIDED ***");
+            return;
+        }
         for _ in 0..10 {
-            for decider in deciders.iter_mut() {
+            for (i, decider) in deciders.iter_mut().enumerate() {
+                if banned_deciders.contains(&i) {
+                    continue;
+                }
                 smol::future::block_on(decider.sync_state(None).or(async {
                     for _ in 0..3 {
                         smol::future::yield_now().await;
@@ -104,12 +135,18 @@ fn main() {
             }
         }
         for (i, decider) in deciders.iter_mut().enumerate() {
+            if banned_deciders.contains(&i) {
+                continue;
+            }
             if let Some(res) = decider.post_tick() {
                 eprintln!("*** {} DECIDED {:?} ***", i, res);
             }
         }
         for _ in 0..10 {
-            for decider in deciders.iter_mut() {
+            for (i, decider) in deciders.iter_mut().enumerate() {
+                if banned_deciders.contains(&i) {
+                    continue;
+                }
                 smol::future::block_on(decider.sync_state(None).or(async {
                     for _ in 0..3 {
                         smol::future::yield_now().await;
@@ -118,7 +155,5 @@ fn main() {
             }
         }
     }
-    for decider in deciders.iter().take(3) {
-        println!("{}", decider.debug_graphviz());
-    }
+    panic!("took too many ticks")
 }
