@@ -47,8 +47,9 @@ impl DeciderConfig for MockConfig {
             {
                 let dmsgs = prev.value().get_diff(&summary);
                 for diff in dmsgs {
-                    core.apply_one_diff(diff)
-                        .expect("cannot apply diff for some reason")
+                    if let Err(err) = core.apply_one_diff(diff) {
+                        eprintln!("error applying diff: {:?}", err);
+                    }
                 }
             }
             self.past_participants.insert(self.index, core.clone());

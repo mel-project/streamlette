@@ -37,7 +37,7 @@ For fuzzing, we want to be able to deterministically reproduce runs of the conse
   - Use trait objects and similar dynamic dispatch to avoid viral generics
   - Returns info like vote power, entropy seed, and list of public keys; a helper function produces the correct proposer for the given tickno from this info
   - Entire network abstracted into `next_diff_req(req)` and `get_diff_from_peer(req)`, both of which must return relatively quickly, or time out if that's not possible
-- Only fatal errors of `Fatal` propagate to client
+- Only fatal errors of `Fatal` propagate to client (TODO in next version; right now we do not return errors and bad stuff causes misbehavior)
   - Basically, invariants not being upheld
   - Indicates an unrecoverable, >1/3 byzantine failure
   - Don't locally assert this. Not all users of Streamlette want to crash when consensus cannot be reached.

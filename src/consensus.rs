@@ -63,6 +63,7 @@ impl Decider {
     ///
     /// Does no I/O. Either use [Decider::tick_to_end], or call the [Decider::sync_state] method periodically.
     pub fn pre_tick(&mut self) -> Option<Bytes> {
+        self.core.set_max_tick(self.tick + 1);
         if let Some(v) = self.core.get_finalized() {
             self.decision = Some(v.body.clone());
         }

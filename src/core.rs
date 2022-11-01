@@ -1,6 +1,9 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use bytes::Bytes;
@@ -22,6 +25,8 @@ pub struct Core {
     tick_to_leader: Arc<dyn Fn(u64) -> Ed25519PK + Send + Sync + 'static>,
     vote_map: BTreeMap<Ed25519PK, u64>,
     total_votes: u64,
+
+    max_tick: Arc<AtomicU64>,
 }
 
 /// An enum of different possible messages, used to represent a "diff" between different [Core]s.
@@ -33,6 +38,16 @@ pub enum DiffMessage {
 }
 
 impl Core {
+    /// Sets the max tick of the core.
+    pub(crate) fn set_max_tick(&self, tick: u64) {
+        self.max_tick.store(tick, Ordering::SeqCst);
+    }
+
+    /// Gets the max tick of the core.
+    pub(crate) fn max_tick(&self) -> u64 {
+        self.max_tick.load(Ordering::SeqCst)
+    }
+
     /// Obtain a summary of the whole status, as a mapping between message hash and the *XOR of all the hashes of the votes pointing to it*. This is then used when asking around for missing messages.
     pub fn summary(&self) -> HashMap<HashVal, HashVal> {
         let mut toret = HashMap::new();
@@ -122,6 +137,7 @@ impl Core {
             tick_to_leader: Arc::new(tick_to_leader),
             vote_map,
             total_votes,
+            max_tick: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -249,6 +265,13 @@ impl Core {
         if prop.nonce != self.nonce {
             anyhow::bail!("bad nonce")
         }
+        if prop.tick > self.max_tick() {
+            anyhow::bail!(
+                "proposal has tick {} > max tick {}",
+                prop.tick,
+                self.max_tick()
+            )
+        }
         if !self.tick_source.insert((prop.tick, prop.source)) {
             anyhow::bail!("this player already sent something for this tick")
         }
@@ -271,6 +294,7 @@ impl Core {
         {
             anyhow::bail!("vote not voting for anything")
         }
+
         self.votes.insert(vote.chash(), vote.clone());
         log::debug!(
             "{:?} voting for {}, who now has {} votes",
@@ -288,6 +312,13 @@ impl Core {
         }
         if solicit.nonce != self.nonce {
             anyhow::bail!("bad nonce")
+        }
+        if solicit.tick > self.max_tick() {
+            anyhow::bail!(
+                "proposal has tick {} > max tick {}",
+                solicit.tick,
+                self.max_tick()
+            )
         }
         if !self.vote_solicits.contains_key(&solicit.previous)
             && !self.valid_proposals.contains_key(&solicit.previous)
@@ -307,6 +338,7 @@ impl Core {
         if !self.tick_source.insert((solicit.tick, solicit.source)) {
             anyhow::bail!("this player already sent something for this tick")
         }
+
         self.vote_solicits.insert(solicit.chash(), solicit);
         Ok(())
     }
