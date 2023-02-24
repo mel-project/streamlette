@@ -111,17 +111,16 @@ impl Decider {
     pub async fn tick_to_end(mut self) -> Bytes {
         let mut interval = 1.0f64;
         loop {
-            if let Some(result) = self.pre_tick() {
-                return result;
-            }
+            self.pre_tick();
             self.sync_state(Duration::from_secs_f64(interval / 2.0).into())
                 .await;
-            if let Some(result) = self.post_tick() {
-                return result;
-            }
+            let result = self.post_tick();
             self.sync_state(Duration::from_secs_f64(interval / 2.0).into())
                 .await;
-            interval *= 1.1
+            interval *= 1.1;
+            if let Some(result) = result.as_ref() {
+                return result.clone();
+            }
         }
     }
 }
