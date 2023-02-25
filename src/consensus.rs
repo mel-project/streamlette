@@ -111,7 +111,7 @@ impl Decider {
     ///
     /// If liveness is required, it is generally *not* okay to drop the [Decider] after this function returns. Otherwise, some participants' `tick_to_end` may not return. Instead, the decider should be kept running (by calling `sync_state`) until you're sure everyone has gotten the message.
     pub async fn tick_to_end(&mut self) -> Bytes {
-        let mut interval = 1.0f64;
+        let mut interval = 2.0f64;
         loop {
             self.pre_tick();
             self.sync_state(Duration::from_secs_f64(interval / 2.0).into())
@@ -119,7 +119,7 @@ impl Decider {
             let result = self.post_tick();
             self.sync_state(Duration::from_secs_f64(interval / 2.0).into())
                 .await;
-            interval *= 1.1;
+            interval *= 1.6;
             if let Some(result) = result.as_ref() {
                 return result.clone();
             }
