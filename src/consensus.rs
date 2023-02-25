@@ -107,11 +107,11 @@ impl Decider {
         }
     }
 
-    /// Ticks this decider until the decision has been made. We use a gradually increasing synchronization interval that starts from 1 second and increases by 10% every tick.
+    /// Ticks this decider until the decision has been made. We use a gradually increasing synchronization interval that starts from 5 second and increases by 5% every tick.
     ///
     /// If liveness is required, it is generally *not* okay to drop the [Decider] after this function returns. Otherwise, some participants' `tick_to_end` may not return. Instead, the decider should be kept running (by calling `sync_state`) until you're sure everyone has gotten the message.
     pub async fn tick_to_end(&mut self) -> Bytes {
-        let mut interval = 1.0f64;
+        let mut interval = 5.0f64;
         loop {
             if let Some(result) = self.pre_tick() {
                 return result;
