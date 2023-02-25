@@ -123,7 +123,7 @@ impl Decider {
             }
             self.sync_state(Duration::from_secs_f64(interval / 2.0).into())
                 .await;
-            interval *= 2.0;
+            interval *= 1.05;
         }
     }
 }
