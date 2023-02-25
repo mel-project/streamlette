@@ -300,7 +300,10 @@ impl Core {
             "{:?} voting for {}, who now has {} votes",
             vote.source,
             vote.voting_for,
-            self.summary()[&vote.voting_for]
+            self.votes
+                .values()
+                .filter(|v| v.voting_for == vote.voting_for)
+                .count()
         );
         Ok(())
     }
